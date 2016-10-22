@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-var chanIndex chan uint
 var wg sync.WaitGroup
 
 const max = 10000
@@ -15,7 +14,7 @@ const max = 10000
 type Ider struct {
 	MachineIndex uint
 	curVal       uint
-	chanIndex    chan uint
+	chanIndex    chan int64
 }
 
 //NewIder will generate a new Ider with the specified settings
@@ -26,7 +25,7 @@ func NewIder(machineIndex uint) (*Ider, error) {
 
 	ider := Ider{MachineIndex: machineIndex}
 
-	ider.chanIndex = make(chan uint, 1)
+	ider.chanIndex = make(chan int64, 1)
 
 	go ider.generateIndex()
 
@@ -35,8 +34,27 @@ func NewIder(machineIndex uint) (*Ider, error) {
 
 //GenerateID is used to get a new Id from ider
 func (ider *Ider) GenerateID() int64 {
+
 	c := <-ider.chanIndex
-	return time.Now().Unix()*int64(100000000) + int64(c)*max + int64(ider.MachineIndex)
+
+	//the channel might have one stall value in it and one waiting
+	//so we get rid of those two if they are there
+	for c/100000000 != time.Now().Unix() {
+		c = <-ider.chanIndex
+	}
+
+	return c
+}
+
+//GenerateIDs is used to retrieve several ID's in seequence
+//This should be use with care because of the limit of 9999 ids / second
+func (ider *Ider) GenerateIDs(noOfIDs uint) []int64 {
+	generatedIDs := make([]int64, noOfIDs)
+	var i uint
+	for i = 0; i < noOfIDs; i++ {
+		generatedIDs[i] = ider.GenerateID()
+	}
+	return generatedIDs
 }
 
 func (ider *Ider) generateIndex() uint {
@@ -45,13 +63,18 @@ func (ider *Ider) generateIndex() uint {
 		now := time.Now().Unix()
 		if now == when {
 			if ider.curVal > max-2 {
-				time.Sleep(1 * time.Millisecond)
+				for now == when {
+					now = time.Now().Unix()
+					time.Sleep(1 * time.Millisecond)
+				}
+				ider.curVal = 1
 			}
 		} else {
 			when = now
-			ider.curVal = 0
+			ider.curVal = 1
 		}
+
+		ider.chanIndex <- when*int64(100000000) + int64(ider.curVal)*max + int64(ider.MachineIndex)
 		ider.curVal++
-		ider.chanIndex <- ider.curVal
 	}
 }
